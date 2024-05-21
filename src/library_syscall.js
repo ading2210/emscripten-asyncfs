@@ -64,7 +64,7 @@ var SyscallsLibrary = {
       {{{ makeSetValue('buf', C_STRUCTS.stat.st_ino, 'stat.ino', 'i64') }}};
       return 0;
     },
-    doMsync(addr, stream, len, flags, offset) {
+    async doMsync(addr, stream, len, flags, offset) {
       if (!FS.isFile(stream.node.mode)) {
         throw new FS.ErrnoError({{{ cDefs.ENODEV }}});
       }
@@ -73,7 +73,7 @@ var SyscallsLibrary = {
         return 0;
       }
       var buffer = HEAPU8.slice(addr, addr + len);
-      FS.msync(stream, buffer, offset, len, flags);
+      await FS.msync(stream, buffer, offset, len, flags);
     },
     // Just like `FS.getStream` but will throw EBADF if stream is undefined.
     getStreamFromFD(fd) {
@@ -157,27 +157,35 @@ var SyscallsLibrary = {
   _munmap_js__i53abi: true,
   _munmap_js: (addr, len, prot, flags, fd, offset) => {
 #if FILESYSTEM && SYSCALLS_REQUIRE_FILESYSTEM
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    if (prot & {{{ cDefs.PROT_WRITE }}}) {
-      SYSCALLS.doMsync(addr, stream, len, flags, offset);
-    }
+    return Asyncify.handleAsync(async () => {
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      if (prot & {{{ cDefs.PROT_WRITE }}}) {
+        await SYSCALLS.doMsync(addr, stream, len, flags, offset);
+      }
+    });
 #endif
   },
 
   __syscall_chdir: (path) => {
-    path = SYSCALLS.getStr(path);
-    FS.chdir(path);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      await FS.chdir(path);
+      return 0;
+    });
   },
   __syscall_chmod: (path, mode) => {
-    path = SYSCALLS.getStr(path);
-    FS.chmod(path, mode);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      await FS.chmod(path, mode);
+      return 0;  
+    });
   },
   __syscall_rmdir: (path) => {
-    path = SYSCALLS.getStr(path);
-    FS.rmdir(path);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      await FS.rmdir(path);
+      return 0;  
+    });
   },
   __syscall_dup: (fd) => {
     var old = SYSCALLS.getStreamFromFD(fd);
@@ -535,9 +543,11 @@ var SyscallsLibrary = {
   },
 #endif // ~PROXY_POSIX_SOCKETS==0
   __syscall_fchdir: (fd) => {
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    FS.chdir(stream.path);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      await FS.chdir(stream.path);
+      return 0;  
+    });
   },
   __syscall__newselect: (nfds, readfds, writefds, exceptfds, timeout) => {
     // readfds are supported,
@@ -632,9 +642,11 @@ var SyscallsLibrary = {
   },
   _msync_js__i53abi: true,
   _msync_js: (addr, len, prot, flags, fd, offset) => {
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
-    SYSCALLS.doMsync(addr, SYSCALLS.getStreamFromFD(fd), len, flags, offset);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+      await SYSCALLS.doMsync(addr, SYSCALLS.getStreamFromFD(fd), len, flags, offset);
+      return 0;  
+    });
   },
   __syscall_fdatasync: (fd) => {
     var stream = SYSCALLS.getStreamFromFD(fd);
@@ -662,87 +674,103 @@ var SyscallsLibrary = {
   },
   __syscall_getcwd__deps: ['$lengthBytesUTF8', '$stringToUTF8'],
   __syscall_getcwd: (buf, size) => {
-    if (size === 0) return -{{{ cDefs.EINVAL }}};
-    var cwd = FS.cwd();
-    var cwdLengthInBytes = lengthBytesUTF8(cwd) + 1;
-    if (size < cwdLengthInBytes) return -{{{ cDefs.ERANGE }}};
-    stringToUTF8(cwd, buf, size);
-    return cwdLengthInBytes;
+    return Asyncify.handleAsync(async () => {
+      if (size === 0) return -{{{ cDefs.EINVAL }}};
+      var cwd = await FS.cwd();
+      var cwdLengthInBytes = lengthBytesUTF8(cwd) + 1;
+      if (size < cwdLengthInBytes) return -{{{ cDefs.ERANGE }}};
+      stringToUTF8(cwd, buf, size);
+      return cwdLengthInBytes;  
+    });
   },
   __syscall_truncate64__i53abi: true,
   __syscall_truncate64: (path, length) => {
-    if (isNaN(length)) return {{{ cDefs.EOVERFLOW }}};
-    path = SYSCALLS.getStr(path);
-    FS.truncate(path, length);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      if (isNaN(length)) return {{{ cDefs.EOVERFLOW }}};
+      path = SYSCALLS.getStr(path);
+      await FS.truncate(path, length);
+      return 0;  
+    });
   },
   __syscall_ftruncate64__i53abi: true,
   __syscall_ftruncate64: (fd, length) => {
-    if (isNaN(length)) return {{{ cDefs.EOVERFLOW }}};
-    FS.ftruncate(fd, length);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      if (isNaN(length)) return {{{ cDefs.EOVERFLOW }}};
+      await FS.ftruncate(fd, length);
+      return 0;  
+    });
   },
   __syscall_stat64: (path, buf) => {
-    path = SYSCALLS.getStr(path);
-    return SYSCALLS.doStat(FS.stat, path, buf);
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      return await SYSCALLS.doStat(FS.stat, path, buf);  
+    });
   },
   __syscall_lstat64: (path, buf) => {
-    path = SYSCALLS.getStr(path);
-    return SYSCALLS.doStat(FS.lstat, path, buf);
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      return await SYSCALLS.doStat(FS.lstat, path, buf);  
+    });
   },
   __syscall_fstat64: (fd, buf) => {
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    return SYSCALLS.doStat(FS.stat, stream.path, buf);
+    return Asyncify.handleAsync(async () => {
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      return await SYSCALLS.doStat(FS.stat, stream.path, buf);  
+    });
   },
   __syscall_fchown32: (fd, owner, group) => {
-    FS.fchown(fd, owner, group);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      await FS.fchown(fd, owner, group);
+      return 0;  
+    });
   },
   __syscall_getdents64__deps: ['$stringToUTF8'],
   __syscall_getdents64: (fd, dirp, count) => {
-    var stream = SYSCALLS.getStreamFromFD(fd)
-    stream.getdents ||= FS.readdir(stream.path);
-
-    var struct_size = {{{ C_STRUCTS.dirent.__size__ }}};
-    var pos = 0;
-    var off = FS.llseek(stream, 0, {{{ cDefs.SEEK_CUR }}});
-
-    var idx = Math.floor(off / struct_size);
-
-    while (idx < stream.getdents.length && pos + struct_size <= count) {
-      var id;
-      var type;
-      var name = stream.getdents[idx];
-      if (name === '.') {
-        id = stream.node.id;
-        type = 4; // DT_DIR
+    return Asyncify.handleAsync(async () => {
+      var stream = SYSCALLS.getStreamFromFD(fd)
+      stream.getdents ||= await FS.readdir(stream.path);
+  
+      var struct_size = {{{ C_STRUCTS.dirent.__size__ }}};
+      var pos = 0;
+      var off = await FS.llseek(stream, 0, {{{ cDefs.SEEK_CUR }}});
+  
+      var idx = Math.floor(off / struct_size);
+  
+      while (idx < stream.getdents.length && pos + struct_size <= count) {
+        var id;
+        var type;
+        var name = stream.getdents[idx];
+        if (name === '.') {
+          id = stream.node.id;
+          type = 4; // DT_DIR
+        }
+        else if (name === '..') {
+          var lookup = await FS.lookupPath(stream.path, { parent: true });
+          id = lookup.node.id;
+          type = 4; // DT_DIR
+        }
+        else {
+          var child = await FS.lookupNode(stream.node, name);
+          id = child.id;
+          type = FS.isChrdev(child.mode) ? 2 :  // DT_CHR, character device.
+                 FS.isDir(child.mode) ? 4 :     // DT_DIR, directory.
+                 FS.isLink(child.mode) ? 10 :   // DT_LNK, symbolic link.
+                 8;                             // DT_REG, regular file.
+        }
+  #if ASSERTIONS
+        assert(id);
+  #endif
+        {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_ino, 'id', 'i64') }}};
+        {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_off, '(idx + 1) * struct_size', 'i64') }}};
+        {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_reclen, C_STRUCTS.dirent.__size__, 'i16') }}};
+        {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_type, 'type', 'i8') }}};
+        stringToUTF8(name, dirp + pos + {{{ C_STRUCTS.dirent.d_name }}}, 256);
+        pos += struct_size;
+        idx += 1;
       }
-      else if (name === '..') {
-        var lookup = FS.lookupPath(stream.path, { parent: true });
-        id = lookup.node.id;
-        type = 4; // DT_DIR
-      }
-      else {
-        var child = FS.lookupNode(stream.node, name);
-        id = child.id;
-        type = FS.isChrdev(child.mode) ? 2 :  // DT_CHR, character device.
-               FS.isDir(child.mode) ? 4 :     // DT_DIR, directory.
-               FS.isLink(child.mode) ? 10 :   // DT_LNK, symbolic link.
-               8;                             // DT_REG, regular file.
-      }
-#if ASSERTIONS
-      assert(id);
-#endif
-      {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_ino, 'id', 'i64') }}};
-      {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_off, '(idx + 1) * struct_size', 'i64') }}};
-      {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_reclen, C_STRUCTS.dirent.__size__, 'i16') }}};
-      {{{ makeSetValue('dirp + pos', C_STRUCTS.dirent.d_type, 'type', 'i8') }}};
-      stringToUTF8(name, dirp + pos + {{{ C_STRUCTS.dirent.d_name }}}, 256);
-      pos += struct_size;
-      idx += 1;
-    }
-    FS.llseek(stream, idx * struct_size, {{{ cDefs.SEEK_SET }}});
-    return pos;
+      await FS.llseek(stream, idx * struct_size, {{{ cDefs.SEEK_SET }}});
+      return pos;  
+    });
   },
 #if SYSCALLS_REQUIRE_FILESYSTEM
   __syscall_fcntl64__deps: ['$syscallGetVarargP', '$syscallGetVarargI'],
@@ -753,7 +781,7 @@ var SyscallsLibrary = {
     dbg('no-op in fcntl syscall due to SYSCALLS_REQUIRE_FILESYSTEM=0');
 #endif
     return 0;
-#else
+#else      
     var stream = SYSCALLS.getStreamFromFD(fd);
     switch (cmd) {
       case {{{ cDefs.F_DUPFD }}}: {
@@ -797,9 +825,9 @@ var SyscallsLibrary = {
         dbg(`warning: fcntl unrecognized command ${cmd}`);
 #endif
     }
-    return -{{{ cDefs.EINVAL }}};
-#endif // SYSCALLS_REQUIRE_FILESYSTEM
+    return -{{{ cDefs.EINVAL }}};  
   },
+#endif // SYSCALLS_REQUIRE_FILESYSTEM
 
   __syscall_statfs64: (path, size, buf) => {
     path = SYSCALLS.getStr(path);
@@ -832,186 +860,215 @@ var SyscallsLibrary = {
   },
   __syscall_openat__deps: ['$syscallGetVarargI'],
   __syscall_openat: (dirfd, path, flags, varargs) => {
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    var mode = varargs ? syscallGetVarargI() : 0;
-    return FS.open(path, flags, mode).fd;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      var mode = varargs ? syscallGetVarargI() : 0;
+      return await FS.open(path, flags, mode).fd;  
+    });
   },
   __syscall_mkdirat: (dirfd, path, mode) => {
-#if SYSCALL_DEBUG
-    dbg('warning: untested syscall');
-#endif
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    // remove a trailing slash, if one - /a/b/ has basename of '', but
-    // we want to create b in the context of this function
-    path = PATH.normalize(path);
-    if (path[path.length-1] === '/') path = path.substr(0, path.length-1);
-    FS.mkdir(path, mode, 0);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALL_DEBUG
+      dbg('warning: untested syscall');
+  #endif
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      // remove a trailing slash, if one - /a/b/ has basename of '', but
+      // we want to create b in the context of this function
+      path = PATH.normalize(path);
+      if (path[path.length-1] === '/') path = path.substr(0, path.length-1);
+      await FS.mkdir(path, mode, 0);
+      return 0;  
+    });
   },
   __syscall_mknodat: (dirfd, path, mode, dev) => {
-#if SYSCALL_DEBUG
-    dbg('warning: untested syscall');
-#endif
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    // we don't want this in the JS API as it uses mknod to create all nodes.
-    switch (mode & {{{ cDefs.S_IFMT }}}) {
-      case {{{ cDefs.S_IFREG }}}:
-      case {{{ cDefs.S_IFCHR }}}:
-      case {{{ cDefs.S_IFBLK }}}:
-      case {{{ cDefs.S_IFIFO }}}:
-      case {{{ cDefs.S_IFSOCK }}}:
-        break;
-      default: return -{{{ cDefs.EINVAL }}};
-    }
-    FS.mknod(path, mode, dev);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALL_DEBUG
+      dbg('warning: untested syscall');
+  #endif
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      // we don't want this in the JS API as it uses mknod to create all nodes.
+      switch (mode & {{{ cDefs.S_IFMT }}}) {
+        case {{{ cDefs.S_IFREG }}}:
+        case {{{ cDefs.S_IFCHR }}}:
+        case {{{ cDefs.S_IFBLK }}}:
+        case {{{ cDefs.S_IFIFO }}}:
+        case {{{ cDefs.S_IFSOCK }}}:
+          break;
+        default: return -{{{ cDefs.EINVAL }}};
+      }
+      await FS.mknod(path, mode, dev);
+      return 0;  
+    });
   },
   __syscall_fchownat: (dirfd, path, owner, group, flags) => {
-#if SYSCALL_DEBUG
-    dbg('warning: untested syscall');
-#endif
-    path = SYSCALLS.getStr(path);
-    var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
-    flags = flags & (~{{{ cDefs.AT_SYMLINK_NOFOLLOW }}});
-#if ASSERTIONS
-    assert(flags === 0);
-#endif
-    path = SYSCALLS.calculateAt(dirfd, path);
-    (nofollow ? FS.lchown : FS.chown)(path, owner, group);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALL_DEBUG
+      dbg('warning: untested syscall');
+  #endif
+      path = SYSCALLS.getStr(path);
+      var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
+      flags = flags & (~{{{ cDefs.AT_SYMLINK_NOFOLLOW }}});
+  #if ASSERTIONS
+      assert(flags === 0);
+  #endif
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      await (nofollow ? FS.lchown : FS.chown)(path, owner, group);
+      return 0;  
+    });
   },
   __syscall_newfstatat: (dirfd, path, buf, flags) => {
-    path = SYSCALLS.getStr(path);
-    var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
-    var allowEmpty = flags & {{{ cDefs.AT_EMPTY_PATH }}};
-    flags = flags & (~{{{ cDefs.AT_SYMLINK_NOFOLLOW | cDefs.AT_EMPTY_PATH | cDefs.AT_NO_AUTOMOUNT }}});
-#if ASSERTIONS
-    assert(!flags, `unknown flags in __syscall_newfstatat: ${flags}`);
-#endif
-    path = SYSCALLS.calculateAt(dirfd, path, allowEmpty);
-    return SYSCALLS.doStat(nofollow ? FS.lstat : FS.stat, path, buf);
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
+      var allowEmpty = flags & {{{ cDefs.AT_EMPTY_PATH }}};
+      flags = flags & (~{{{ cDefs.AT_SYMLINK_NOFOLLOW | cDefs.AT_EMPTY_PATH | cDefs.AT_NO_AUTOMOUNT }}});
+  #if ASSERTIONS
+      assert(!flags, `unknown flags in __syscall_newfstatat: ${flags}`);
+  #endif
+      path = await SYSCALLS.calculateAt(dirfd, path, allowEmpty);
+      return await SYSCALLS.doStat(nofollow ? FS.lstat : FS.stat, path, buf);  
+    });
   },
   __syscall_unlinkat: (dirfd, path, flags) => {
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    if (flags === 0) {
-      FS.unlink(path);
-    } else if (flags === {{{ cDefs.AT_REMOVEDIR }}}) {
-      FS.rmdir(path);
-    } else {
-      abort('Invalid flags passed to unlinkat');
-    }
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      if (flags === 0) {
+        await FS.unlink(path);
+      } else if (flags === {{{ cDefs.AT_REMOVEDIR }}}) {
+        await FS.rmdir(path);
+      } else {
+        abort('Invalid flags passed to unlinkat');
+      }
+      return 0;  
+    });
   },
   __syscall_renameat: (olddirfd, oldpath, newdirfd, newpath) => {
-    oldpath = SYSCALLS.getStr(oldpath);
-    newpath = SYSCALLS.getStr(newpath);
-    oldpath = SYSCALLS.calculateAt(olddirfd, oldpath);
-    newpath = SYSCALLS.calculateAt(newdirfd, newpath);
-    FS.rename(oldpath, newpath);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      oldpath = SYSCALLS.getStr(oldpath);
+      newpath = SYSCALLS.getStr(newpath);
+      oldpath = await SYSCALLS.calculateAt(olddirfd, oldpath);
+      newpath = await SYSCALLS.calculateAt(newdirfd, newpath);
+      await FS.rename(oldpath, newpath);
+      return 0;  
+    });
   },
   __syscall_symlinkat: (target, newdirfd, linkpath) => {
-#if SYSCALL_DEBUG
-    dbg('warning: untested syscall');
-#endif
-    linkpath = SYSCALLS.calculateAt(newdirfd, linkpath);
-    FS.symlink(target, linkpath);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALL_DEBUG
+      dbg('warning: untested syscall');
+  #endif
+      linkpath = await SYSCALLS.calculateAt(newdirfd, linkpath);
+      await FS.symlink(target, linkpath);
+      return 0;  
+    });
   },
   __syscall_readlinkat__deps: ['$lengthBytesUTF8', '$stringToUTF8'],
   __syscall_readlinkat: (dirfd, path, buf, bufsize) => {
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    if (bufsize <= 0) return -{{{ cDefs.EINVAL }}};
-    var ret = FS.readlink(path);
-
-    var len = Math.min(bufsize, lengthBytesUTF8(ret));
-    var endChar = HEAP8[buf+len];
-    stringToUTF8(ret, buf, bufsize+1);
-    // readlink is one of the rare functions that write out a C string, but does never append a null to the output buffer(!)
-    // stringToUTF8() always appends a null byte, so restore the character under the null byte after the write.
-    HEAP8[buf+len] = endChar;
-    return len;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      if (bufsize <= 0) return -{{{ cDefs.EINVAL }}};
+      var ret = await FS.readlink(path);
+  
+      var len = Math.min(bufsize, lengthBytesUTF8(ret));
+      var endChar = HEAP8[buf+len];
+      stringToUTF8(ret, buf, bufsize+1);
+      // readlink is one of the rare functions that write out a C string, but does never append a null to the output buffer(!)
+      // stringToUTF8() always appends a null byte, so restore the character under the null byte after the write.
+      HEAP8[buf+len] = endChar;
+      return len;  
+    });
   },
   __syscall_fchmodat2: (dirfd, path, mode, flags) => {
-    var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
-    path = SYSCALLS.getStr(path);
-    path = SYSCALLS.calculateAt(dirfd, path);
-    FS.chmod(path, mode, nofollow);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      var nofollow = flags & {{{ cDefs.AT_SYMLINK_NOFOLLOW }}};
+      path = SYSCALLS.getStr(path);
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      await FS.chmod(path, mode, nofollow);
+      return 0;  
+    });
   },
   __syscall_faccessat: (dirfd, path, amode, flags) => {
-#if SYSCALL_DEBUG
-    dbg('warning: untested syscall');
-#endif
-    path = SYSCALLS.getStr(path);
-#if ASSERTIONS
-    assert(flags === 0);
-#endif
-    path = SYSCALLS.calculateAt(dirfd, path);
-    if (amode & ~{{{ cDefs.S_IRWXO }}}) {
-      // need a valid mode
-      return -{{{ cDefs.EINVAL }}};
-    }
-    var lookup = FS.lookupPath(path, { follow: true });
-    var node = lookup.node;
-    if (!node) {
-      return -{{{ cDefs.ENOENT }}};
-    }
-    var perms = '';
-    if (amode & {{{ cDefs.R_OK }}}) perms += 'r';
-    if (amode & {{{ cDefs.W_OK }}}) perms += 'w';
-    if (amode & {{{ cDefs.X_OK }}}) perms += 'x';
-    if (perms /* otherwise, they've just passed F_OK */ && FS.nodePermissions(node, perms)) {
-      return -{{{ cDefs.EACCES }}};
-    }
-    return 0;
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALL_DEBUG
+      dbg('warning: untested syscall');
+  #endif
+      path = SYSCALLS.getStr(path);
+  #if ASSERTIONS
+      assert(flags === 0);
+  #endif
+      path = await SYSCALLS.calculateAt(dirfd, path);
+      if (amode & ~{{{ cDefs.S_IRWXO }}}) {
+        // need a valid mode
+        return -{{{ cDefs.EINVAL }}};
+      }
+      var lookup = await FS.lookupPath(path, { follow: true });
+      var node = lookup.node;
+      if (!node) {
+        return -{{{ cDefs.ENOENT }}};
+      }
+      var perms = '';
+      if (amode & {{{ cDefs.R_OK }}}) perms += 'r';
+      if (amode & {{{ cDefs.W_OK }}}) perms += 'w';
+      if (amode & {{{ cDefs.X_OK }}}) perms += 'x';
+      if (perms /* otherwise, they've just passed F_OK */ && FS.nodePermissions(node, perms)) {
+        return -{{{ cDefs.EACCES }}};
+      }
+      return 0;
+  
+    });
   },
   __syscall_utimensat__deps: ['$readI53FromI64'],
   __syscall_utimensat: (dirfd, path, times, flags) => {
-    path = SYSCALLS.getStr(path);
-#if ASSERTIONS
-    assert(flags === 0);
-#endif
-    path = SYSCALLS.calculateAt(dirfd, path, true);
-    if (!times) {
-      var atime = Date.now();
-      var mtime = atime;
-    } else {
-      var seconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_sec, 'i53') }}};
-      var nanoseconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_nsec, 'i32') }}};
-      atime = (seconds*1000) + (nanoseconds/(1000*1000));
-      times += {{{ C_STRUCTS.timespec.__size__ }}};
-      seconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_sec, 'i53') }}};
-      nanoseconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_nsec, 'i32') }}};
-      mtime = (seconds*1000) + (nanoseconds/(1000*1000));
-    }
-    FS.utime(path, atime, mtime);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      path = SYSCALLS.getStr(path);
+  #if ASSERTIONS
+      assert(flags === 0);
+  #endif
+      path = await SYSCALLS.calculateAt(dirfd, path, true);
+      if (!times) {
+        var atime = Date.now();
+        var mtime = atime;
+      } else {
+        var seconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_sec, 'i53') }}};
+        var nanoseconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_nsec, 'i32') }}};
+        atime = (seconds*1000) + (nanoseconds/(1000*1000));
+        times += {{{ C_STRUCTS.timespec.__size__ }}};
+        seconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_sec, 'i53') }}};
+        nanoseconds = {{{ makeGetValue('times', C_STRUCTS.timespec.tv_nsec, 'i32') }}};
+        mtime = (seconds*1000) + (nanoseconds/(1000*1000));
+      }
+      await FS.utime(path, atime, mtime);
+      return 0;      
+    });
   },
   __syscall_fallocate__i53abi: true,
   __syscall_fallocate: (fd, mode, offset, len) => {
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
-    var stream = SYSCALLS.getStreamFromFD(fd)
-#if ASSERTIONS
-    assert(mode === 0);
-#endif
-    FS.allocate(stream, offset, len);
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+      var stream = SYSCALLS.getStreamFromFD(fd)
+  #if ASSERTIONS
+      assert(mode === 0);
+  #endif
+      await FS.allocate(stream, offset, len);
+      return 0;  
+    });
   },
   __syscall_dup3: (fd, newfd, flags) => {
-    var old = SYSCALLS.getStreamFromFD(fd);
-#if ASSERTIONS
-    assert(!flags);
-#endif
-    if (old.fd === newfd) return -{{{ cDefs.EINVAL }}};
-    var existing = FS.getStream(newfd);
-    if (existing) FS.close(existing);
-    return FS.dupStream(old, newfd).fd;
+    return Asyncify.handleAsync(async () => {
+      var old = SYSCALLS.getStreamFromFD(fd);
+  #if ASSERTIONS
+      assert(!flags);
+  #endif
+      if (old.fd === newfd) return -{{{ cDefs.EINVAL }}};
+      var existing = FS.getStream(newfd);
+      if (existing) await FS.close(existing);
+      return FS.dupStream(old, newfd).fd;      
+    });
   },
 };
 
