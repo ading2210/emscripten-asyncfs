@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+
 addToLibrary({
   $FS__deps: ['$randomFill', '$PATH', '$PATH_FS', '$TTY', '$MEMFS',
     '$FS_createPreloadedFile',
@@ -613,7 +614,7 @@ FS.staticInit();` +
 
       return mountRoot;
     },
-    unmount(mountpoint) {
+    async unmount(mountpoint) {
       var lookup = await FS.lookupPath(mountpoint, { follow_mount: false });
 
       if (!FS.isMountpoint(lookup.node)) {
@@ -1208,7 +1209,7 @@ FS.staticInit();` +
       }
       if (stream.seekable && stream.flags & {{{ cDefs.O_APPEND }}}) {
         // seek to the end before writing in append mode
-        FS.llseek(stream, 0, {{{ cDefs.SEEK_END }}});
+        await FS.llseek(stream, 0, {{{ cDefs.SEEK_END }}});
       }
       var seeking = typeof position != 'undefined';
       if (!seeking) {
@@ -1263,7 +1264,7 @@ FS.staticInit();` +
       }
       return await stream.stream_ops.mmap(stream, length, position, prot, flags);
     },
-    asymc msync(stream, buffer, offset, length, mmapFlags) {
+    async msync(stream, buffer, offset, length, mmapFlags) {
 #if ASSERTIONS
       assert(offset >= 0);
 #endif
@@ -1317,7 +1318,7 @@ FS.staticInit();` +
     // module-level FS code
     //
     cwd: () => FS.currentPath,
-    chdir(path) {
+    async chdir(path) {
       var lookup = await FS.lookupPath(path, { follow: true });
       if (lookup.node === null) {
         throw new FS.ErrnoError({{{ cDefs.ENOENT }}});
@@ -1372,7 +1373,7 @@ FS.staticInit();` +
       // create /proc/self/fd which allows /proc/self/fd/6 => readlink gives the
       // name of the stream for fd 6 (see test_unistd_ttyname)
       await FS.mkdir('/proc');
-      var proc_self = FS.mkdir('/proc/self');
+      var proc_self = await FS.mkdir('/proc/self');
       await FS.mkdir('/proc/self/fd');
       await FS.mount({
         mount() {
@@ -1394,7 +1395,7 @@ FS.staticInit();` +
         }
       }, {}, '/proc/self/fd');
     },
-    createStandardStreams() {
+    async createStandardStreams() {
       // TODO deprecate the old functionality of a single
       // input / output callback and that utilizes FS.createDevice
       // and instead require a unique set of stream ops
@@ -1404,45 +1405,47 @@ FS.staticInit();` +
       // have been overwritten we create a unique device for
       // them instead.
       if (Module['stdin']) {
-        FS.createDevice('/dev', 'stdin', Module['stdin']);
+        await FS.createDevice('/dev', 'stdin', Module['stdin']);
       } else {
-        FS.symlink('/dev/tty', '/dev/stdin');
+        await FS.symlink('/dev/tty', '/dev/stdin');
       }
       if (Module['stdout']) {
-        FS.createDevice('/dev', 'stdout', null, Module['stdout']);
+        await FS.createDevice('/dev', 'stdout', null, Module['stdout']);
       } else {
-        FS.symlink('/dev/tty', '/dev/stdout');
+        await FS.symlink('/dev/tty', '/dev/stdout');
       }
       if (Module['stderr']) {
-        FS.createDevice('/dev', 'stderr', null, Module['stderr']);
+        await FS.createDevice('/dev', 'stderr', null, Module['stderr']);
       } else {
-        FS.symlink('/dev/tty1', '/dev/stderr');
+        await FS.symlink('/dev/tty1', '/dev/stderr');
       }
 
       // open default streams for the stdin, stdout and stderr devices
-      var stdin = FS.open('/dev/stdin', {{{ cDefs.O_RDONLY }}});
-      var stdout = FS.open('/dev/stdout', {{{ cDefs.O_WRONLY }}});
-      var stderr = FS.open('/dev/stderr', {{{ cDefs.O_WRONLY }}});
+      var stdin = await FS.open('/dev/stdin', {{{ cDefs.O_RDONLY }}});
+      var stdout = await FS.open('/dev/stdout', {{{ cDefs.O_WRONLY }}});
+      var stderr = await FS.open('/dev/stderr', {{{ cDefs.O_WRONLY }}});
 #if ASSERTIONS
       assert(stdin.fd === 0, `invalid handle for stdin (${stdin.fd})`);
       assert(stdout.fd === 1, `invalid handle for stdout (${stdout.fd})`);
       assert(stderr.fd === 2, `invalid handle for stderr (${stderr.fd})`);
 #endif
     },
-    staticInit() {
+    async staticInit() {
       // Some errors may happen quite a bit, to avoid overhead we reuse them (and suffer a lack of stack info)
+      
       [{{{ cDefs.ENOENT }}}].forEach((code) => {
         FS.genericErrors[code] = new FS.ErrnoError(code);
         FS.genericErrors[code].stack = '<generic error, no stack>';
       });
+      
 
       FS.nameTable = new Array(4096);
 
-      FS.mount(MEMFS, {}, '/');
+      await FS.mount(MEMFS, {}, '/');
 
-      FS.createDefaultDirectories();
-      FS.createDefaultDevices();
-      FS.createSpecialDirectories();
+      await FS.createDefaultDirectories();
+      await FS.createDefaultDevices();
+      await FS.createSpecialDirectories();
 
       FS.filesystems = {
         'MEMFS': MEMFS,

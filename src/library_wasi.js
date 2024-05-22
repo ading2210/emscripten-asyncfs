@@ -197,13 +197,13 @@ var WasiLibrary = {
 
 #if SYSCALLS_REQUIRE_FILESYSTEM
   $doReadv__docs: '/** @param {number=} offset */',
-  $doReadv: (stream, iov, iovcnt, offset) => {
+  $doReadv: async (stream, iov, iovcnt, offset) => {
     var ret = 0;
     for (var i = 0; i < iovcnt; i++) {
       var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
       var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
       iov += {{{ C_STRUCTS.iovec.__size__ }}};
-      var curr = FS.read(stream, HEAP8, ptr, len, offset);
+      var curr = await FS.read(stream, HEAP8, ptr, len, offset);
       if (curr < 0) return -1;
       ret += curr;
       if (curr < len) break; // nothing more to read
@@ -214,13 +214,13 @@ var WasiLibrary = {
     return ret;
   },
   $doWritev__docs: '/** @param {number=} offset */',
-  $doWritev: (stream, iov, iovcnt, offset) => {
+  $doWritev: async (stream, iov, iovcnt, offset) => {
     var ret = 0;
     for (var i = 0; i < iovcnt; i++) {
       var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
       var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
       iov += {{{ C_STRUCTS.iovec.__size__ }}};
-      var curr = FS.write(stream, HEAP8, ptr, len, offset);
+      var curr = await FS.write(stream, HEAP8, ptr, len, offset);
       if (curr < 0) return -1;
       ret += curr;
       if (typeof offset != 'undefined') {
@@ -267,24 +267,27 @@ var WasiLibrary = {
   fd_write__deps: ['$printChar'],
 #endif
   fd_write: (fd, iov, iovcnt, pnum) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    var num = doWritev(stream, iov, iovcnt);
-#else
-    // hack to support printf in SYSCALLS_REQUIRE_FILESYSTEM=0
-    var num = 0;
-    for (var i = 0; i < iovcnt; i++) {
-      var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
-      var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
-      iov += {{{ C_STRUCTS.iovec.__size__ }}};
-      for (var j = 0; j < len; j++) {
-        printChar(fd, HEAPU8[ptr+j]);
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      var num = await doWritev(stream, iov, iovcnt);
+  #else
+      // hack to support printf in SYSCALLS_REQUIRE_FILESYSTEM=0
+      var num = 0;
+      for (var i = 0; i < iovcnt; i++) {
+        var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
+        var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
+        iov += {{{ C_STRUCTS.iovec.__size__ }}};
+        for (var j = 0; j < len; j++) {
+          printChar(fd, HEAPU8[ptr+j]);
+        }
+        num += len;
       }
-      num += len;
-    }
-#endif // SYSCALLS_REQUIRE_FILESYSTEM
-    {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
-    return 0;
+  #endif // SYSCALLS_REQUIRE_FILESYSTEM
+      {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
+      return 0;
+
+    });
   },
 
 #if SYSCALLS_REQUIRE_FILESYSTEM
@@ -292,52 +295,59 @@ var WasiLibrary = {
 #endif
   fd_pwrite__i53abi: true,
   fd_pwrite: (fd, iov, iovcnt, offset, pnum) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
-    var stream = SYSCALLS.getStreamFromFD(fd)
-    var num = doWritev(stream, iov, iovcnt, offset);
-    {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
-    return 0;
-#elif ASSERTIONS
-    abort('fd_pwrite called without SYSCALLS_REQUIRE_FILESYSTEM');
-#else
-    return {{{ cDefs.ENOSYS }}};
-#endif
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+      var stream = SYSCALLS.getStreamFromFD(fd)
+      var num = await doWritev(stream, iov, iovcnt, offset);
+      {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
+      return 0;
+  #elif ASSERTIONS
+      abort('fd_pwrite called without SYSCALLS_REQUIRE_FILESYSTEM');
+  #else
+      return {{{ cDefs.ENOSYS }}};
+  #endif
+    });
   },
 
   fd_close: (fd) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    FS.close(stream);
-    return 0;
-#elif PROXY_POSIX_SOCKETS
-    // close() is a tricky function because it can be used to close both regular file descriptors
-    // and POSIX network socket handles, hence an implementation would need to track for each
-    // file descriptor which kind of item it is. To simplify, when using PROXY_POSIX_SOCKETS
-    // option, use shutdown() to close a socket, and this function should behave like a no-op.
-    warnOnce('To close sockets with PROXY_POSIX_SOCKETS bridge, prefer to use the function shutdown() that is proxied, instead of close()')
-    return 0;
-#elif ASSERTIONS
-    abort('fd_close called without SYSCALLS_REQUIRE_FILESYSTEM');
-#else
-    return {{{ cDefs.ENOSYS }}};
-#endif // SYSCALLS_REQUIRE_FILESYSTEM
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      await FS.close(stream);
+      return 0;
+  #elif PROXY_POSIX_SOCKETS
+      // close() is a tricky function because it can be used to close both regular file descriptors
+      // and POSIX network socket handles, hence an implementation would need to track for each
+      // file descriptor which kind of item it is. To simplify, when using PROXY_POSIX_SOCKETS
+      // option, use shutdown() to close a socket, and this function should behave like a no-op.
+      warnOnce('To close sockets with PROXY_POSIX_SOCKETS bridge, prefer to use the function shutdown() that is proxied, instead of close()')
+      return 0;
+  #elif ASSERTIONS
+      abort('fd_close called without SYSCALLS_REQUIRE_FILESYSTEM');
+  #else
+      return {{{ cDefs.ENOSYS }}};
+  #endif // SYSCALLS_REQUIRE_FILESYSTEM
+
+    });
   },
 
 #if SYSCALLS_REQUIRE_FILESYSTEM
   fd_read__deps: ['$doReadv'],
 #endif
   fd_read: (fd, iov, iovcnt, pnum) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    var num = doReadv(stream, iov, iovcnt);
-    {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
-    return 0;
-#elif ASSERTIONS
-    abort('fd_read called without SYSCALLS_REQUIRE_FILESYSTEM');
-#else
-    return {{{ cDefs.ENOSYS }}};
-#endif // SYSCALLS_REQUIRE_FILESYSTEM
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      var num = await doReadv(stream, iov, iovcnt);
+      {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
+      return 0;
+  #elif ASSERTIONS
+      abort('fd_read called without SYSCALLS_REQUIRE_FILESYSTEM');
+  #else
+      return {{{ cDefs.ENOSYS }}};
+  #endif // SYSCALLS_REQUIRE_FILESYSTEM  
+    });
   },
 
 #if SYSCALLS_REQUIRE_FILESYSTEM
@@ -345,31 +355,35 @@ var WasiLibrary = {
 #endif
   fd_pread__i53abi: true,
   fd_pread: (fd, iov, iovcnt, offset, pnum) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
-    var stream = SYSCALLS.getStreamFromFD(fd)
-    var num = doReadv(stream, iov, iovcnt, offset);
-    {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
-    return 0;
-#elif ASSERTIONS
-    abort('fd_pread called without SYSCALLS_REQUIRE_FILESYSTEM');
-#else
-    return {{{ cDefs.ENOSYS }}};
-#endif
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+      var stream = SYSCALLS.getStreamFromFD(fd)
+      var num = await doReadv(stream, iov, iovcnt, offset);
+      {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
+      return 0;
+  #elif ASSERTIONS
+      abort('fd_pread called without SYSCALLS_REQUIRE_FILESYSTEM');
+  #else
+      return {{{ cDefs.ENOSYS }}};
+  #endif  
+    });
   },
 
   fd_seek__i53abi: true,
   fd_seek: (fd, offset, whence, newOffset) => {
-#if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
-    var stream = SYSCALLS.getStreamFromFD(fd);
-    FS.llseek(stream, offset, whence);
-    {{{ makeSetValue('newOffset', '0', 'stream.position', 'i64') }}};
-    if (stream.getdents && offset === 0 && whence === {{{ cDefs.SEEK_SET }}}) stream.getdents = null; // reset readdir state
-    return 0;
-#else
-    return {{{ cDefs.ESPIPE }}};
-#endif
+    return Asyncify.handleAsync(async () => {
+  #if SYSCALLS_REQUIRE_FILESYSTEM
+      if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      await FS.llseek(stream, offset, whence);
+      {{{ makeSetValue('newOffset', '0', 'stream.position', 'i64') }}};
+      if (stream.getdents && offset === 0 && whence === {{{ cDefs.SEEK_SET }}}) stream.getdents = null; // reset readdir state
+      return 0;
+  #else
+      return {{{ cDefs.ESPIPE }}};
+  #endif
+    });
   },
 
   $wasiRightsToMuslOFlags: (rights) => {
@@ -416,21 +430,23 @@ var WasiLibrary = {
   path_open: (fd, dirflags, path, path_len, oflags,
               fs_rights_base, fs_rights_inherting,
               fdflags, opened_fd) => {
-    if (!(fd in preopens)) {
-      return {{{ cDefs.EBADF }}};
-    }
-    var pathname = UTF8ToString(path, path_len);
-    var musl_oflags = wasiRightsToMuslOFlags(Number(fs_rights_base));
-#if SYSCALL_DEBUG
-    dbg(`oflags1: ${ptrToString(musl_oflags)}`);
-#endif
-    musl_oflags |= wasiOFlagsToMuslOFlags(Number(oflags));
-#if SYSCALL_DEBUG
-    dbg(`oflags2: ${ptrToString(musl_oflags)}`);
-#endif
-    var stream = FS.open(pathname, musl_oflags);
-    {{{ makeSetValue('opened_fd', '0', 'stream.fd', 'i32') }}};
-    return 0;
+    return Asyncify.handleAsync(async () => {
+      if (!(fd in preopens)) {
+        return {{{ cDefs.EBADF }}};
+      }
+      var pathname = UTF8ToString(path, path_len);
+      var musl_oflags = wasiRightsToMuslOFlags(Number(fs_rights_base));
+  #if SYSCALL_DEBUG
+      dbg(`oflags1: ${ptrToString(musl_oflags)}`);
+  #endif
+      musl_oflags |= wasiOFlagsToMuslOFlags(Number(oflags));
+  #if SYSCALL_DEBUG
+      dbg(`oflags2: ${ptrToString(musl_oflags)}`);
+  #endif
+      var stream = await FS.open(pathname, musl_oflags);
+      {{{ makeSetValue('opened_fd', '0', 'stream.fd', 'i32') }}};
+      return 0;  
+    });            
   },
 
   fd_prestat_dir_name__deps: ['$preopens'],
